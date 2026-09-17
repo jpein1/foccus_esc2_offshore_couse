@@ -5,7 +5,6 @@ folium
 numpy
 pandas
 pillow
-matplotlib
 altair
 
 rasterio

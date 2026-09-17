@@ -4,49 +4,12 @@ folium
 
 numpy
 pandas
-matplotlib
 pillow
+matplotlib
+altair
 
 rasterio
-geopandas
-shapely
-pyproj
-pyogrio
-branca
-
-xarray
-netCDF4
-h5netcdf
-h5py
-
-scipy
-altair
 
 boto3
-botocore
-
-pmtiles
-folium-pmtiles
 
 pyyaml
-global-land-mask 
-streamlit
-streamlit-folium
-folium
-branca
-jinja2
-
-numpy
-pandas
-matplotlib
-altair
-Pillow
-
-rasterio
-geopandas
-shapely
-pyproj
-pyogrio
-
-xarray
-netCDF4

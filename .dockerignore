@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Git
+.git/
+.gitignore
+
+# Local Streamlit/cache files
+.streamlit/
+.cache/
+.pytest_cache/
+
+# Local data
+data/
+datasets/
+geotiff/
+geojson/
+
+# Raster files
+*.tif
+*.tiff
+*.vrt
+*.nc
+*.hdf
+*.h5
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.log
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

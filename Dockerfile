@@ -17,9 +17,7 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Only copy files the application actually needs
-COPY app.py .
-COPY config ./config
+COPY . .
 
 EXPOSE 8501
 

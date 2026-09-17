@@ -1,46 +1,45 @@
-# Python
+.git/
+.github/
+
 __pycache__/
 *.py[cod]
 *.pyo
-*.pyd
 
-# Virtual environments
 .venv/
 venv/
 env/
 ENV/
 
-# Git
-.git/
-.gitignore
-
-# Local Streamlit/cache files
-.streamlit/
 .cache/
 .pytest_cache/
+.mypy_cache/
 
-# Local data
+.streamlit/
+
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Data now stored in S3
 data/
 datasets/
 geotiff/
 geojson/
 
-# Raster files
+# Scientific/raster data
 *.tif
 *.tiff
-*.vrt
 *.nc
 *.hdf
 *.h5
+*.hdf5
+*.vrt
 
-# Temporary files
-tmp/
-temp/
-*.tmp
-*.log
-
-# OS/editor files
-.DS_Store
-Thumbs.db
+# Local development
 .vscode/
 .idea/
+
+build/
+dist/
+*.egg-info/

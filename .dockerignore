@@ -1,33 +1,30 @@
-.git/
-.github/
+.git
+.github
 
-__pycache__/
+__pycache__
 *.py[cod]
-*.pyo
 
-.venv/
-venv/
-env/
-ENV/
+.venv
+venv
+env
+ENV
 
-.cache/
-.pytest_cache/
-.mypy_cache/
+.cache
+.pytest_cache
+.mypy_cache
 
-.streamlit/
+.streamlit
 
 *.log
 *.tmp
 .DS_Store
 Thumbs.db
 
-# Data now stored in S3
-data/
-datasets/
-geotiff/
-geojson/
+data
+datasets
+geotiff
+geojson
 
-# Scientific/raster data
 *.tif
 *.tiff
 *.nc
@@ -36,10 +33,9 @@ geojson/
 *.hdf5
 *.vrt
 
-# Local development
-.vscode/
-.idea/
+.vscode
+.idea
 
-build/
-dist/
-*.egg-info/
+build
+dist
+*.egg-info

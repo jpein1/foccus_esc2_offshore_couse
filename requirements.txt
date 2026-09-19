@@ -8,6 +8,7 @@ pillow
 altair
 
 rasterio
+matplotlib
 
 boto3
 

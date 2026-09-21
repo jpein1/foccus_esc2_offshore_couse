@@ -1,17 +1,16 @@
+```python
 import io
+import json
 import os
-from pathlib import Path
+from urllib.request import Request, urlopen
 
 import altair as alt
-import boto3
 import folium
 import numpy as np
 import pandas as pd
 import rasterio
 import streamlit as st
 
-from botocore import UNSIGNED
-from botocore.client import Config
 from folium.plugins import Fullscreen
 from matplotlib import cm
 from matplotlib.colors import Normalize
@@ -36,37 +35,47 @@ st.caption("Mussel biomass, scenarios, and spatial analysis viewer")
 
 
 # ============================================================
-# S3 CONFIGURATION
+# PUBLIC DATA CONFIGURATION
+# ============================================================
+#
+# Data are publicly readable through HTTPS.
+#
+# IMPORTANT:
+# The application does NOT use S3 ListObjectsV2.
+#
+# A manifest.json file must exist at:
+#
+# https://minio.dive.edito.eu/project-foccus/
+#   Hereon/ESC2_blue_economy/manifest.json
+#
+# The manifest contains relative paths such as:
+#
+# {
+#   "geotiff": [
+#     "geotiff/ScenM0/salt_20200501T000000.tif",
+#     "geotiff/ScenM0/temp_20200501T000000.tif",
+#     "geotiff/ScenM2/xxx_20200501T000000.tif",
+#     "geotiff/ScenM3/xxx_20200501T000000.tif"
+#   ],
+#   "geojson": [
+#     "geojson/harvest_timeseries_scenario_Scen_M2.geojson",
+#     "geojson/harvest_timeseries_scenario_Scen_M3.geojson"
+#   ],
+#   "csv": [
+#     "Meerwind_monopiles_lonlat.csv"
+#   ]
+# }
+#
 # ============================================================
 
-S3_BUCKET = os.getenv(
-    "S3_BUCKET",
-    "project-foccus",
-)
+PUBLIC_BASE_URL = os.getenv(
+    "PUBLIC_BASE_URL",
+    "https://minio.dive.edito.eu/project-foccus/Hereon/ESC2_blue_economy",
+).rstrip("/")
 
-S3_PROJECT_PREFIX = os.getenv(
-    "S3_PROJECT_PREFIX",
-    "Hereon/ESC2_blue_economy",
-).strip("/")
-
-S3_GEOTIFF_PREFIX = f"{S3_PROJECT_PREFIX}/geotiff"
-S3_GEOJSON_PREFIX = f"{S3_PROJECT_PREFIX}/geojson"
-
-S3_ENDPOINT_URL = os.getenv(
-    "S3_ENDPOINT_URL",
-    os.getenv(
-        "AWS_ENDPOINT_URL",
-        "https://minio.dive.edito.eu",
-    ),
-)
-
-S3_REGION = os.getenv(
-    "AWS_DEFAULT_REGION",
-    os.getenv(
-        "AWS_REGION",
-        "eu-central-1",
-    ),
-)
+PUBLIC_GEOTIFF_URL = f"{PUBLIC_BASE_URL}/geotiff"
+PUBLIC_GEOJSON_URL = f"{PUBLIC_BASE_URL}/geojson"
+PUBLIC_MANIFEST_URL = f"{PUBLIC_BASE_URL}/manifest.json"
 
 
 # ============================================================
@@ -76,6 +85,7 @@ S3_REGION = os.getenv(
 # project-foccus/
 # └── Hereon/
 #     └── ESC2_blue_economy/
+#         ├── manifest.json
 #         ├── Meerwind_monopiles_lonlat.csv
 #         ├── geotiff/
 #         │   ├── ScenM0/
@@ -110,136 +120,114 @@ BASELINE_ONLY_VARIABLES = {
 
 
 # ============================================================
-# S3 CLIENT
+# PUBLIC HTTP HELPERS
 # ============================================================
 
-@st.cache_resource
-def _get_s3_client():
+@st.cache_data(show_spinner=False)
+def _read_public_bytes(url):
     """
-    Create an S3/MinIO client.
+    Download a publicly accessible object over HTTPS.
 
-    If credentials are available, use them.
-    Otherwise use anonymous access.
+    No S3 credentials are required.
     """
 
-    access_key = os.getenv("AWS_ACCESS_KEY_ID")
-    secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "OWF-LTA-co-use-dashboard/1.0",
+        },
+    )
 
-    if access_key and secret_key:
-        return boto3.client(
-            "s3",
-            endpoint_url=S3_ENDPOINT_URL,
-            region_name=S3_REGION,
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-        )
+    with urlopen(
+        request,
+        timeout=60,
+    ) as response:
+        return response.read()
 
-    return boto3.client(
-        "s3",
-        endpoint_url=S3_ENDPOINT_URL,
-        region_name=S3_REGION,
-        config=Config(signature_version=UNSIGNED),
+
+def _public_object_url(key):
+    """
+    Convert a manifest-relative object path into
+    its public HTTPS URL.
+    """
+
+    return (
+        f"{PUBLIC_BASE_URL}/"
+        f"{key.lstrip('/')}"
     )
 
 
 # ============================================================
-# S3 HELPERS
+# LOAD PUBLIC MANIFEST
 # ============================================================
 
 @st.cache_data(show_spinner=False)
-def _list_s3_objects(bucket, prefix):
+def _load_manifest():
     """
-    List all objects below an S3 prefix.
-    """
+    Load the public project manifest.
 
-    client = _get_s3_client()
-
-    objects = []
-
-    paginator = client.get_paginator("list_objects_v2")
-
-    for page in paginator.paginate(
-        Bucket=bucket,
-        Prefix=prefix.rstrip("/") + "/",
-    ):
-        for obj in page.get("Contents", []):
-            key = obj.get("Key")
-
-            if key:
-                objects.append(
-                    {
-                        "key": key,
-                        "size": obj.get("Size", 0),
-                        "last_modified": obj.get("LastModified"),
-                    }
-                )
-
-    return objects
-
-
-@st.cache_data(show_spinner=False)
-def _read_s3_bytes(bucket, key):
-    """
-    Download an S3 object into memory.
+    The manifest replaces S3 ListObjectsV2 discovery.
     """
 
-    client = _get_s3_client()
-
-    response = client.get_object(
-        Bucket=bucket,
-        Key=key,
+    manifest_bytes = _read_public_bytes(
+        PUBLIC_MANIFEST_URL
     )
 
-    return response["Body"].read()
+    return json.loads(
+        manifest_bytes.decode("utf-8")
+    )
 
-
-# ============================================================
-# DISCOVER PROJECT OBJECTS
-# ============================================================
 
 try:
-    geotiff_objects = _list_s3_objects(
-        S3_BUCKET,
-        S3_GEOTIFF_PREFIX,
+    manifest = _load_manifest()
+
+    geotiff_keys = manifest.get(
+        "geotiff",
+        [],
     )
 
-    geojson_objects = _list_s3_objects(
-        S3_BUCKET,
-        S3_GEOJSON_PREFIX,
+    geojson_keys = manifest.get(
+        "geojson",
+        [],
     )
 
-    project_objects = _list_s3_objects(
-        S3_BUCKET,
-        S3_PROJECT_PREFIX,
+    csv_keys = manifest.get(
+        "csv",
+        [],
     )
 
 except Exception as exc:
     st.error(
-        "Could not access the S3/MinIO project data.\n\n"
+        "Could not load the public project manifest.\n\n"
         f"{exc}"
     )
     st.stop()
 
 
 # ============================================================
-# DISCOVER GEOTIFF FILES
+# DISCOVER GEOTIFF FILES FROM MANIFEST
 # ============================================================
 
 records = []
 
-for obj in geotiff_objects:
+for key in geotiff_keys:
 
-    key = obj["key"]
-
-    if not key.lower().endswith((".tif", ".tiff")):
+    if not isinstance(key, str):
         continue
 
-    parts = key.strip("/").split("/")
+    key = key.strip("/")
+
+    if not key.lower().endswith(
+        (".tif", ".tiff")
+    ):
+        continue
+
+    parts = key.split("/")
 
     # Expected:
-    # Hereon/ESC2_blue_economy/geotiff/ScenM0/file.tif
-    # Hereon/ESC2_blue_economy/geotiff/ScenM2/file.tif
-    # Hereon/ESC2_blue_economy/geotiff/ScenM3/file.tif
+    # geotiff/ScenM0/file.tif
+    # geotiff/ScenM2/file.tif
+    # geotiff/ScenM3/file.tif
 
     if len(parts) < 2:
         continue
@@ -259,7 +247,10 @@ for obj in geotiff_objects:
     # variable_YYYYMMDDTHHMMSS.tif
 
     try:
-        variable, timestamp_string = filename.rsplit("_", 1)
+        variable, timestamp_string = filename.rsplit(
+            "_",
+            1,
+        )
 
         timestamp_string = os.path.splitext(
             timestamp_string
@@ -284,15 +275,7 @@ for obj in geotiff_objects:
     #
     # salt and temp are baseline/reference variables.
     #
-    # We explicitly reject them from scenario folders.
-    # This prevents the app from ever using:
-    #
-    #   ScenM2/salt_*.tif
-    #   ScenM3/salt_*.tif
-    #   ScenM2/temp_*.tif
-    #   ScenM3/temp_*.tif
-    #
-    # even if such files accidentally appear later.
+    # Explicitly reject them from scenario folders.
     # --------------------------------------------------------
 
     if variable in BASELINE_ONLY_VARIABLES:
@@ -311,7 +294,6 @@ for obj in geotiff_objects:
                 else "Scenario"
             ),
             "scenario": scenario_folder,
-            "bucket": S3_BUCKET,
         }
     )
 
@@ -320,28 +302,38 @@ df_files = pd.DataFrame(records)
 
 if df_files.empty:
     st.error(
-        "No valid GeoTIFF files were found in the S3 project."
+        "No valid GeoTIFF files were found in the public manifest."
     )
     st.stop()
 
 df_files = df_files.sort_values(
-    ["scenario", "variable", "time"]
+    [
+        "scenario",
+        "variable",
+        "time",
+    ]
 ).reset_index(drop=True)
 
 
 # ============================================================
-# GEOJSON DISCOVERY
+# GEOJSON DISCOVERY FROM MANIFEST
 # ============================================================
 
 geojson_objects_by_name = {}
 
-for obj in geojson_objects:
+for key in geojson_keys:
 
-    key = obj["key"]
+    if not isinstance(key, str):
+        continue
+
+    key = key.strip("/")
+
     filename = key.split("/")[-1]
 
     if filename.lower().endswith(".geojson"):
-        geojson_objects_by_name[filename.lower()] = key
+        geojson_objects_by_name[
+            filename.lower()
+        ] = key
 
 
 def _find_geojson_key(*patterns):
@@ -391,10 +383,8 @@ if scenario_2_geojson:
 @st.cache_data(show_spinner=False)
 def _load_geojson_timeseries_from_bytes(geojson_bytes):
     """
-    Load harvest/bio-mass time series from GeoJSON bytes.
+    Load harvest/biomass time series from GeoJSON bytes.
     """
-
-    import json
 
     data = json.loads(
         geojson_bytes.decode("utf-8")
@@ -402,7 +392,10 @@ def _load_geojson_timeseries_from_bytes(geojson_bytes):
 
     rows = []
 
-    for feature in data.get("features", []):
+    for feature in data.get(
+        "features",
+        [],
+    ):
 
         properties = feature.get(
             "properties",
@@ -458,13 +451,9 @@ def _load_geojson_timeseries_from_bytes(geojson_bytes):
 
 
 @st.cache_data(show_spinner=False)
-def _cached_load_geojson_timeseries(
-    bucket,
-    key,
-):
-    geojson_bytes = _read_s3_bytes(
-        bucket,
-        key,
+def _cached_load_geojson_timeseries(key):
+    geojson_bytes = _read_public_bytes(
+        _public_object_url(key)
     )
 
     return _load_geojson_timeseries_from_bytes(
@@ -478,26 +467,24 @@ def _cached_load_geojson_timeseries(
 
 turbine_key = None
 
-for obj in project_objects:
+for key in csv_keys:
 
-    key = obj["key"]
+    if not isinstance(key, str):
+        continue
 
     if (
         key.split("/")[-1].lower()
         == "meerwind_monopiles_lonlat.csv"
     ):
-        turbine_key = key
+        turbine_key = key.strip("/")
         break
 
 
 @st.cache_data(show_spinner=False)
-def _load_turbines(
-    bucket,
-    key,
-):
-    csv_bytes = _read_s3_bytes(
-        bucket,
-        key,
+def _load_turbines(key):
+
+    csv_bytes = _read_public_bytes(
+        _public_object_url(key)
     )
 
     try:
@@ -516,11 +503,18 @@ def _load_turbines(
 
     if df.shape[1] < 2:
         return pd.DataFrame(
-            columns=["lon", "lat"]
+            columns=[
+                "lon",
+                "lat",
+            ]
         )
 
     df = df.iloc[:, :2].copy()
-    df.columns = ["lon", "lat"]
+
+    df.columns = [
+        "lon",
+        "lat",
+    ]
 
     df["lon"] = pd.to_numeric(
         df["lon"],
@@ -533,25 +527,37 @@ def _load_turbines(
     )
 
     df = df.dropna(
-        subset=["lon", "lat"]
+        subset=[
+            "lon",
+            "lat",
+        ]
     )
 
     return df
 
 
 if turbine_key:
+
     try:
         turbines = _load_turbines(
-            S3_BUCKET,
-            turbine_key,
+            turbine_key
         )
+
     except Exception:
         turbines = pd.DataFrame(
-            columns=["lon", "lat"]
+            columns=[
+                "lon",
+                "lat",
+            ]
         )
+
 else:
+
     turbines = pd.DataFrame(
-        columns=["lon", "lat"]
+        columns=[
+            "lon",
+            "lat",
+        ]
     )
 
 
@@ -570,7 +576,9 @@ def _render_preview_from_tif(
         rgba, bounds, vmin, vmax
     """
 
-    with MemoryFile(tif_bytes) as memfile:
+    with MemoryFile(
+        tif_bytes
+    ) as memfile:
 
         with memfile.open() as src:
 
@@ -678,7 +686,9 @@ def _render_preview_from_tif(
 
                 nodata = src.nodata
 
-                valid = np.isfinite(data)
+                valid = np.isfinite(
+                    data
+                )
 
                 if nodata is not None:
                     valid &= (
@@ -772,13 +782,10 @@ def _render_preview_from_tif(
 
 
 @st.cache_data(show_spinner=False)
-def _load_tif_cached(
-    bucket,
-    key,
-):
-    tif_bytes = _read_s3_bytes(
-        bucket,
-        key,
+def _load_tif_cached(key):
+
+    tif_bytes = _read_public_bytes(
+        _public_object_url(key)
     )
 
     return _render_preview_from_tif(
@@ -790,17 +797,14 @@ def _load_tif_cached(
 # SCENARIO / REFERENCE HELPERS
 # ============================================================
 
-def _files_for_folder(
-    folder,
-):
+def _files_for_folder(folder):
+
     return df_files[
         df_files["scenario"] == folder
     ].copy()
 
 
-def _variables_for_folder(
-    folder,
-):
+def _variables_for_folder(folder):
     """
     Return variables actually available in a folder.
 
@@ -823,9 +827,7 @@ def _variables_for_folder(
     )
 
 
-def _reference_files_for_variable(
-    variable,
-):
+def _reference_files_for_variable(variable):
     """
     Return reference/baseline files.
 
@@ -901,6 +903,7 @@ selected_source = st.sidebar.radio(
     ],
 )
 
+
 # ------------------------------------------------------------
 # BASELINE
 # ------------------------------------------------------------
@@ -913,6 +916,7 @@ if selected_source == "Baseline":
     st.sidebar.info(
         "Baseline data are read from ScenM0."
     )
+
 
 # ------------------------------------------------------------
 # SCENARIO
@@ -927,9 +931,11 @@ else:
     ]
 
     if not available_scenarios:
+
         st.sidebar.error(
             "No scenario GeoTIFF folders were found."
         )
+
         st.stop()
 
     selected_scenario = st.sidebar.selectbox(
@@ -947,6 +953,7 @@ else:
         selected_scenario
         not in st.session_state.selected_scenarios
     ):
+
         st.session_state.selected_scenarios.append(
             selected_scenario
         )
@@ -1021,6 +1028,7 @@ else:
         selected_var,
     )
 
+
 if active_files.empty:
 
     st.error(
@@ -1043,7 +1051,9 @@ selected_time = st.sidebar.selectbox(
     "Time",
     available_times,
     index=len(available_times) - 1,
-    format_func=lambda x: pd.Timestamp(x).strftime(
+    format_func=lambda x: pd.Timestamp(
+        x
+    ).strftime(
         "%Y-%m-%d %H:%M"
     ),
 )
@@ -1085,8 +1095,7 @@ try:
         vmin,
         vmax,
     ) = _load_tif_cached(
-        selected_row["bucket"],
-        selected_tif_key,
+        selected_tif_key
     )
 
 except Exception as exc:
@@ -1116,6 +1125,7 @@ st.session_state.current_vmax = vmax
 col1, col2, col3 = st.columns(3)
 
 with col1:
+
     st.metric(
         "Dataset",
         (
@@ -1126,12 +1136,14 @@ with col1:
     )
 
 with col2:
+
     st.metric(
         "Variable",
         selected_var,
     )
 
 with col3:
+
     st.metric(
         "Time",
         pd.Timestamp(
@@ -1146,22 +1158,18 @@ with col3:
 # MAIN MAP
 # ============================================================
 
-center_lat = (
-    np.mean(
-        [
-            bounds[0][0],
-            bounds[1][0],
-        ]
-    )
+center_lat = np.mean(
+    [
+        bounds[0][0],
+        bounds[1][0],
+    ]
 )
 
-center_lon = (
-    np.mean(
-        [
-            bounds[0][1],
-            bounds[1][1],
-        ]
-    )
+center_lon = np.mean(
+    [
+        bounds[0][1],
+        bounds[1][1],
+    ]
 )
 
 m = folium.Map(
@@ -1232,7 +1240,6 @@ if (
 
         active_geojson_df = (
             _cached_load_geojson_timeseries(
-                S3_BUCKET,
                 geojson_files[
                     selected_scenario
                 ],
@@ -1263,9 +1270,10 @@ if not active_geojson_df.empty:
 
     # If exact timestamp is not present,
     # use the closest timestamp.
+
     if current_points.empty:
 
-        nearest_time = (
+        nearest_time_index = (
             active_geojson_df["time"]
             .sub(selected_time)
             .abs()
@@ -1274,7 +1282,7 @@ if not active_geojson_df.empty:
 
         nearest_time = (
             active_geojson_df.loc[
-                nearest_time,
+                nearest_time_index,
                 "time",
             ]
         )
@@ -1352,6 +1360,7 @@ if vmin is not None and vmax is not None:
                 {gradient_css}
             );
         "></div>
+
         <div style="
             display:flex;
             justify-content:space-between;
@@ -1472,8 +1481,6 @@ else:
             )
 
             # ------------------------------------------------
-            # IMPORTANT:
-            #
             # Reference is ALWAYS selected from ScenM0.
             # ------------------------------------------------
 
@@ -1499,16 +1506,18 @@ else:
             try:
 
                 scenario_bytes = (
-                    _read_s3_bytes(
-                        S3_BUCKET,
-                        scenario_key,
+                    _read_public_bytes(
+                        _public_object_url(
+                            scenario_key
+                        )
                     )
                 )
 
                 reference_bytes = (
-                    _read_s3_bytes(
-                        S3_BUCKET,
-                        reference_key,
+                    _read_public_bytes(
+                        _public_object_url(
+                            reference_key
+                        )
                     )
                 )
 
@@ -1620,6 +1629,7 @@ else:
                                             )
                                             or diff_abs == 0
                                         ):
+
                                             diff_abs = 1.0
 
                                         norm = Normalize(
@@ -1706,7 +1716,6 @@ else:
                                             height=550,
                                         )
 
-
             except Exception as exc:
 
                 st.warning(
@@ -1733,6 +1742,7 @@ if (
     )
 
     if ts_df_tmp.empty:
+
         st.info(
             "No biomass time-series data available."
         )
@@ -1762,7 +1772,10 @@ if (
 
         n_farms = (
             ts_df_tmp[
-                ["lon", "lat"]
+                [
+                    "lon",
+                    "lat",
+                ]
             ]
             .drop_duplicates()
             .shape[0]
@@ -1778,7 +1791,9 @@ if (
         # ----------------------------------------------------
 
         biomass_chart = (
-            alt.Chart(avg_tmp)
+            alt.Chart(
+                avg_tmp
+            )
             .mark_line()
             .encode(
                 x=alt.X(
@@ -1819,7 +1834,9 @@ if (
         # ----------------------------------------------------
 
         harvest_chart = (
-            alt.Chart(avg_tmp)
+            alt.Chart(
+                avg_tmp
+            )
             .mark_bar()
             .encode(
                 x=alt.X(
@@ -1891,7 +1908,10 @@ if (
 
         points = (
             active_geojson_df[
-                ["lon", "lat"]
+                [
+                    "lon",
+                    "lat",
+                ]
             ]
             .drop_duplicates()
             .copy()
@@ -1941,7 +1961,9 @@ if (
         )
 
         point_chart = (
-            alt.Chart(point_ts)
+            alt.Chart(
+                point_ts
+            )
             .mark_line()
             .encode(
                 x=alt.X(
@@ -2055,27 +2077,27 @@ with st.expander(
 
 
 # ============================================================
-# DEBUG / DATA SOURCE INFORMATION
+# DATA SOURCE INFORMATION
 # ============================================================
 
 with st.expander(
-    "S3 data source"
+    "Public data source"
 ):
 
     st.write(
-        f"**Bucket:** `{S3_BUCKET}`"
+        f"**Public base URL:** `{PUBLIC_BASE_URL}`"
     )
 
     st.write(
-        f"**Project prefix:** `{S3_PROJECT_PREFIX}`"
+        f"**Manifest:** `{PUBLIC_MANIFEST_URL}`"
     )
 
     st.write(
-        f"**GeoTIFF prefix:** `{S3_GEOTIFF_PREFIX}`"
+        f"**GeoTIFF URL:** `{PUBLIC_GEOTIFF_URL}`"
     )
 
     st.write(
-        f"**GeoJSON prefix:** `{S3_GEOJSON_PREFIX}`"
+        f"**GeoJSON URL:** `{PUBLIC_GEOJSON_URL}`"
     )
 
     st.write(
@@ -2090,3 +2112,4 @@ with st.expander(
             )
         )
     )
+```

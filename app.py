@@ -8,7 +8,7 @@ from urllib.request import Request, urlopen
 
 import altair as alt
 import folium
-import matplotlib.cm as cm
+import matplotlib 
 import numpy as np
 import pandas as pd
 import rasterio
@@ -506,7 +506,7 @@ def make_folium_map(
             (vmax - vmin)
         )
 
-    cmap = cm.get_cmap("viridis")
+    cmap = matplotlib.colormaps["viridis"]
 
     for lon, lat, value, norm_value in zip(
         plot_df["lon"],

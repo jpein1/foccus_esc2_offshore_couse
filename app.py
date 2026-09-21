@@ -1,4 +1,5 @@
 # Public EDITO/MinIO integration of the original OWF & LTA dashboard.\n# Existing UI, maps, plots and analysis are retained; local object\n# discovery/reads are replaced by deterministic HTTPS access.\n\nimport base64
+import base64
 import io
 import json
 import os

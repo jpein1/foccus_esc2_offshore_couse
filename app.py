@@ -1,4 +1,3 @@
-```python
 import io
 import json
 import os
@@ -2112,4 +2111,4 @@ with st.expander(
             )
         )
     )
-```
+

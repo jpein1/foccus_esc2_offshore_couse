@@ -408,8 +408,6 @@ def available_remote_variables(source: str, scenario_folder: str) -> list:
 
 def _load_geojson_timeseries(geojson_url_string: str) -> pd.DataFrame:
     payload = read_public_json(geojson_url_string)
-
-    payload = json.loads(geojson_path.read_text(encoding="utf-8"))
     features = payload.get("features", [])
     rows = []
     for f in features:
@@ -558,71 +556,28 @@ def load_turbines(csv_url_string):
 
 turbine_df = load_turbines(turbine_csv)
 
-records = []
+# ------------------------------------------------------------------
+# Lazy remote data selection
+# ------------------------------------------------------------------
+# Do not scan the complete EDITO object store at startup.  The public
+# object store cannot be listed by this application, so probing every
+# scenario/variable/timestamp here would create thousands of HTTP requests
+# before Streamlit can render the controls.  Instead, the sidebar is built
+# first and only the selected variable/scenario is probed.
 
-# No bucket listing is used: each expected timestamp is probed directly.
-for folder in [REFERENCE_SCENARIO] + list(SCENARIO_TO_FOLDER.values()):
-    for variable in REMOTE_VARIABLE_CANDIDATES:
-        df_remote = build_remote_file_index(
-            variable,
-            "Scenario",
-            folder,
-        )
-        if not df_remote.empty:
-            records.extend(df_remote.to_dict("records"))
+# These are the datasets exposed by the original dashboard.  In the EDITO
+# layout, ScenM0 is the reference/baseline folder for all supported
+# variables (chla, oxy, salt, temp, and optionally mussel_weight).
+source_options = ["Baseline", "Scenario"]
 
-if not records:
-    st.error(
-        "No public GeoTIFFs were found in the configured EDITO/MinIO "
-        "time range. Check DATA_START/DATA_END and the public object path."
-    )
-    st.stop()
-
-df_files = (
-    pd.DataFrame(records)
-    .drop_duplicates(subset=["url"])
-    .sort_values("time")
-    .reset_index(drop=True)
-)
-
-#variables = sorted(df_files["variable"].unique())
-
-
-#with st.sidebar:
- #   st.header("Inputs")
-#
- #   selected_var = st.selectbox("Variable", variables)
-  #  scenario = st.sidebar.selectbox("Select Scenario", list(geojson_files.keys()))
-# --- sidebar FIRST ---
 with st.sidebar:
     st.header("Inputs")
 
-    source_options = sorted(df_files["source"].unique())
-
     selected_source = st.selectbox(
         "Dataset",
-        source_options
+        source_options,
+        index=0,
     )
-   
-    if selected_source == "Baseline":
-        probe_scenario = REFERENCE_SCENARIO
-    else:
-        probe_scenario = (
-            SCENARIO_TO_FOLDER.get(scenario, REFERENCE_SCENARIO)
-            if scenario is not None
-            else REFERENCE_SCENARIO
-        )
-
-    variables = [
-        v for v in REMOTE_VARIABLE_CANDIDATES
-        if v in available_remote_variables("Scenario", probe_scenario)
-    ]
-
-    if not variables:
-        st.error("No supported public variables are available for this selection.")
-        st.stop()
-
-    selected_var = st.selectbox("Variable", variables)
 
     scenario = st.selectbox(
         "Select Scenario",
@@ -631,62 +586,60 @@ with st.sidebar:
         index=0,
     )
 
-    if scenario is not None:
-        if scenario not in st.session_state.selected_scenarios:
-            st.session_state.selected_scenarios.append(scenario)
-        
-    
-    #scenario = st.multiselect(
-     #   "Select Scenarios",
-      #  list(geojson_files.keys())
-    #)
+    if scenario is not None and scenario not in st.session_state.selected_scenarios:
+        st.session_state.selected_scenarios.append(scenario)
 
-#    folder_scenario = SCENARIOS.get(scenario)
+    # ScenM0 contains the reference/baseline GeoTIFFs on EDITO.
     if selected_source == "Baseline":
-
-    # Physics reference
-        df_var = df_files[
-            (df_files["variable"] == selected_var) &
-            (df_files["source"] == "Baseline")
-        ]
-
-        folder_scenario = "Baseline"
-
+        folder_scenario = REFERENCE_SCENARIO
+    elif scenario is None:
+        folder_scenario = REFERENCE_SCENARIO
     else:
-    # Biology GeoTIFFs
-        if selected_source == "Baseline":
+        folder_scenario = SCENARIO_TO_FOLDER[scenario]
 
-            folder_scenario = "Baseline"
+    # Keep the original variable choices visible immediately.  We no longer
+    # probe all five variables just to populate this dropdown.
+    selected_var = st.selectbox(
+        "Variable",
+        REMOTE_VARIABLE_CANDIDATES,
+    )
 
-        else:
+    # Probe only the selected variable/folder.  This is the first remote
+    # GeoTIFF discovery performed by the app.
+    df_var = build_remote_file_index(
+        selected_var,
+        "Scenario",
+        folder_scenario,
+    )
 
-            if scenario is None:
-                folder_scenario = "ScenM0"     # default until user picks one
-            else:
-                folder_scenario = SCENARIO_TO_FOLDER[scenario]
-
-       
-            df_var = df_files[
-                (df_files["variable"] == selected_var) &
-                (df_files["source"] == "Scenario") &
-                (df_files["scenario"] == folder_scenario)
-            ]
-
-        
     if df_var.empty:
         st.error(
-            f"No GeoTIFFs found for:\n"
+            "No public GeoTIFFs were found for the current selection.\n\n"
             f"Variable = {selected_var}\n"
-            f"Source = {selected_source}\n"
-            f"Scenario = {folder_scenario}"
+            f"Folder = {folder_scenario}\n\n"
+            "Check the EDITO object path and DATA_START/DATA_END."
         )
         st.stop()
 
-# Metadata for currently displayed raster
-    scenario_name = "Baseline" if selected_source == "Baseline" else folder_scenario
+    # Keep a small lazy index for downstream code.  For scenario difference
+    # maps, add only the selected variable's ScenM0 reference index.
+    df_files = df_var.copy()
+    if selected_source == "Scenario" and folder_scenario != REFERENCE_SCENARIO:
+        ref_df = build_remote_file_index(
+            selected_var,
+            "Scenario",
+            REFERENCE_SCENARIO,
+        )
+        if not ref_df.empty:
+            df_files = (
+                pd.concat([df_files, ref_df], ignore_index=True)
+                .drop_duplicates(subset=["url"])
+                .sort_values("time")
+                .reset_index(drop=True)
+            )
 
-
-# Ensure time column is datetime
+    # The rest of the dashboard expects df_var to contain only the currently
+    # selected dataset/scenario.
     df_var = df_var.copy()
     df_var["time"] = pd.to_datetime(df_var["time"])
 
@@ -709,11 +662,8 @@ with st.sidebar:
     selected_row = df_var.loc[idx]
     selected_tif = selected_row["file"]
 
-
-
     st.write("Selected file:", selected_tif.rsplit("/", 1)[-1])
 
-    
     opacity = st.slider("TIFF overlay opacity", 0.0, 1.0, 0.75, 0.05)
     show_point_markers = st.checkbox("Show GeoJSON point markers", value=True)
     max_markers = st.slider("Max markers on map", 100, 5000, 1200, 100)

@@ -1,15 +1,27 @@
 streamlit
 streamlit-folium==0.25.0
 folium
+branca
+jinja2
 
 numpy
 pandas
-pillow
-altair
+matplotlib
+Pillow
+scipy
 
 rasterio
-matplotlib
+geopandas
+shapely
+pyproj
+pyogrio
 
-boto3
+altair
+
+xarray
+netCDF4
+h5netcdf
+h5py
 
 pyyaml
+global-land-mask

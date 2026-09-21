@@ -1239,20 +1239,6 @@ st.dataframe(
 # CONFIGURATION NOTE
 # =============================================================================
 
-with st.expander("Configuration"):
-    st.markdown(
-        """
-The app does not use S3 bucket listing.
-
-GeoTIFF URLs are generated from the regular filename convention:
-
-`variable_YYYYMMDDTHHMMSS.tif`
-
-The timestamp interval can be configured with:
-
-`DATA_INTERVAL_HOURS`
-
-For example:
-
-```text
-DATA_INTERVAL_HOURS=1
+DATA_INTERVAL_HOURS = float(
+    os.getenv("DATA_INTERVAL_HOURS", "1")
+)
